@@ -1,84 +1,146 @@
-import React, {useMemo, useState} from 'react';
+import React, {useEffect, useMemo, useRef, useState} from 'react';
 import {
+  Animated,
+  Dimensions,
+  Image,
+  ImageSourcePropType,
+  PanResponder,
   Pressable,
   SafeAreaView,
   StatusBar,
   StyleSheet,
   Text,
   View,
-  useWindowDimensions,
 } from 'react-native';
 
+import {puzzleImageDate, puzzleImages} from './puzzleImages';
+
 const GRID_SIZE = 3;
-const EMPTY_TILE = 0;
-const SOLVED_BOARD = [1, 2, 3, 4, 5, 6, 7, 8, EMPTY_TILE];
+const PIECE_COUNT = GRID_SIZE * GRID_SIZE;
+const SCREEN_WIDTH = Dimensions.get('window').width;
 
-const isSolved = (board: number[]) =>
-  board.every((tile, index) => tile === SOLVED_BOARD[index]);
-
-const canMove = (board: number[], index: number) => {
-  const emptyIndex = board.indexOf(EMPTY_TILE);
-  const row = Math.floor(index / GRID_SIZE);
-  const col = index % GRID_SIZE;
-  const emptyRow = Math.floor(emptyIndex / GRID_SIZE);
-  const emptyCol = emptyIndex % GRID_SIZE;
-
-  return Math.abs(row - emptyRow) + Math.abs(col - emptyCol) === 1;
+type Piece = {
+  id: number;
+  row: number;
+  col: number;
+  x: number;
+  y: number;
 };
 
-const moveTile = (board: number[], index: number) => {
-  if (!canMove(board, index)) {
-    return board;
-  }
-
-  const nextBoard = [...board];
-  const emptyIndex = nextBoard.indexOf(EMPTY_TILE);
-  nextBoard[emptyIndex] = nextBoard[index];
-  nextBoard[index] = EMPTY_TILE;
-  return nextBoard;
+type DraggablePieceProps = {
+  boardSize: number;
+  imageSource: ImageSourcePropType;
+  piece: Piece;
+  pieceSize: number;
 };
 
-const createShuffledBoard = () => {
-  let board = [...SOLVED_BOARD];
-  let previousEmptyIndex = -1;
+const createRandomPieces = (boardSize: number, pieceSize: number) => {
+  const spreadSize = boardSize - pieceSize;
 
-  for (let step = 0; step < 120; step += 1) {
-    const emptyIndex = board.indexOf(EMPTY_TILE);
-    const possibleMoves = board
-      .map((_, index) => index)
-      .filter(index => canMove(board, index) && index !== previousEmptyIndex);
-    const nextIndex =
-      possibleMoves[Math.floor(Math.random() * possibleMoves.length)];
+  return Array.from({length: PIECE_COUNT}, (_, id) => {
+    const row = Math.floor(id / GRID_SIZE);
+    const col = id % GRID_SIZE;
 
-    previousEmptyIndex = emptyIndex;
-    board = moveTile(board, nextIndex);
-  }
+    return {
+      id,
+      row,
+      col,
+      x: Math.random() * spreadSize,
+      y: Math.random() * spreadSize,
+    };
+  });
+};
 
-  return isSolved(board) ? moveTile(board, SOLVED_BOARD.length - 2) : board;
+const DraggablePiece = ({
+  boardSize,
+  imageSource,
+  piece,
+  pieceSize,
+}: DraggablePieceProps) => {
+  const pan = useRef(new Animated.ValueXY({x: piece.x, y: piece.y})).current;
+  const offset = useRef({x: piece.x, y: piece.y});
+  const dragStart = useRef({x: piece.x, y: piece.y});
+
+  const responder = useMemo(
+    () =>
+      PanResponder.create({
+        onMoveShouldSetPanResponder: () => true,
+        onPanResponderGrant: () => {
+          dragStart.current = offset.current;
+        },
+        onPanResponderMove: (_, gesture) => {
+          const nextOffset = {
+            x: Math.max(
+              0,
+              Math.min(dragStart.current.x + gesture.dx, boardSize - pieceSize),
+            ),
+            y: Math.max(
+              0,
+              Math.min(dragStart.current.y + gesture.dy, boardSize - pieceSize),
+            ),
+          };
+
+          offset.current = nextOffset;
+          pan.setValue(nextOffset);
+        },
+      }),
+    [boardSize, pan, pieceSize],
+  );
+
+  return (
+    <Animated.View
+      {...responder.panHandlers}
+      style={[
+        styles.piece,
+        {
+          width: pieceSize,
+          height: pieceSize,
+          transform: pan.getTranslateTransform(),
+        },
+      ]}>
+      <View style={[styles.pieceCrop, {width: pieceSize, height: pieceSize}]}>
+        <Image
+          resizeMode="cover"
+          source={imageSource}
+          style={{
+            width: boardSize,
+            height: boardSize,
+            left: -piece.col * pieceSize,
+            top: -piece.row * pieceSize,
+          }}
+        />
+      </View>
+      <Text style={styles.pieceNumber}>{piece.id + 1}</Text>
+    </Animated.View>
+  );
 };
 
 const App = (): React.JSX.Element => {
-  const {width} = useWindowDimensions();
-  const boardSize = Math.min(width - 32, 360);
-  const tileSize = boardSize / GRID_SIZE;
-  const [board, setBoard] = useState(createShuffledBoard);
-  const [moves, setMoves] = useState(0);
-  const solved = useMemo(() => isSolved(board), [board]);
+  const boardSize = Math.min(SCREEN_WIDTH - 32, 360);
+  const pieceSize = boardSize / GRID_SIZE;
+  const [imageIndex, setImageIndex] = useState(0);
+  const [pieces, setPieces] = useState(() =>
+    createRandomPieces(boardSize, pieceSize),
+  );
+  const [shuffleKey, setShuffleKey] = useState(1);
 
-  const handleTilePress = (index: number) => {
-    setBoard(currentBoard => {
-      if (!canMove(currentBoard, index) || isSolved(currentBoard)) {
-        return currentBoard;
-      }
+  const selectedImage = puzzleImages[imageIndex];
 
-      setMoves(currentMoves => currentMoves + 1);
-      return moveTile(currentBoard, index);
-    });
+  useEffect(() => {
+    setPieces(createRandomPieces(boardSize, pieceSize));
+  }, [boardSize, imageIndex, pieceSize, shuffleKey]);
+
+  const nextImage = () => {
+    if (puzzleImages.length <= 1) {
+      return;
+    }
+
+    setImageIndex(currentIndex => (currentIndex + 1) % puzzleImages.length);
+    setShuffleKey(currentKey => currentKey + 1);
   };
 
-  const restartGame = () => {
-    setBoard(createShuffledBoard());
-    setMoves(0);
+  const shufflePieces = () => {
+    setShuffleKey(currentKey => currentKey + 1);
   };
 
   return (
@@ -86,57 +148,54 @@ const App = (): React.JSX.Element => {
       <StatusBar barStyle="light-content" backgroundColor="#16231f" />
 
       <View style={styles.header}>
-        <Text style={styles.kicker}>Sliding Puzzle</Text>
-        <Text style={styles.title}>숫자 퍼즐</Text>
+        <Text style={styles.kicker}>Image Puzzle</Text>
+        <Text style={styles.title}>사진 퍼즐</Text>
         <Text style={styles.subtitle}>
-          빈칸 옆 숫자를 움직여 1부터 8까지 순서대로 맞춰보세요.
+          assets/{puzzleImageDate} 폴더의 이미지를 9조각으로 잘라 랜덤
+          배치합니다.
         </Text>
       </View>
 
-      <View style={styles.statsRow}>
-        <View style={styles.statBox}>
-          <Text style={styles.statLabel}>이동</Text>
-          <Text style={styles.statValue}>{moves}</Text>
-        </View>
-        <View style={styles.statBox}>
-          <Text style={styles.statLabel}>상태</Text>
-          <Text style={styles.statValue}>{solved ? '완성' : '진행'}</Text>
-        </View>
-      </View>
-
-      <View style={[styles.board, {width: boardSize, height: boardSize}]}>
-        {board.map((tile, index) => {
-          const empty = tile === EMPTY_TILE;
-
-          return (
-            <Pressable
-              accessibilityLabel={empty ? '빈 칸' : `${tile}번 타일`}
-              accessibilityRole="button"
-              disabled={empty || solved}
-              key={`${tile}-${index}`}
-              onPress={() => handleTilePress(index)}
-              style={[
-                styles.tile,
-                empty && styles.emptyTile,
-                canMove(board, index) &&
-                  !empty &&
-                  !solved &&
-                  styles.movableTile,
-                {width: tileSize - 10, height: tileSize - 10},
-              ]}>
-              {!empty && <Text style={styles.tileText}>{tile}</Text>}
+      {selectedImage ? (
+        <>
+          <View style={styles.toolbar}>
+            <Pressable onPress={shufflePieces} style={styles.button}>
+              <Text style={styles.buttonText}>섞기</Text>
             </Pressable>
-          );
-        })}
-      </View>
+            <Pressable
+              disabled={puzzleImages.length <= 1}
+              onPress={nextImage}
+              style={[
+                styles.button,
+                puzzleImages.length <= 1 && styles.disabledButton,
+              ]}>
+              <Text style={styles.buttonText}>다음 사진</Text>
+            </Pressable>
+          </View>
 
-      <Text style={styles.successText}>
-        {solved ? '좋아요! 퍼즐을 완성했습니다.' : ' '}
-      </Text>
+          <View style={[styles.board, {width: boardSize, height: boardSize}]}>
+            {pieces.map(piece => (
+              <DraggablePiece
+                boardSize={boardSize}
+                imageSource={selectedImage.source}
+                key={`${selectedImage.id}-${shuffleKey}-${piece.id}`}
+                piece={piece}
+                pieceSize={pieceSize}
+              />
+            ))}
+          </View>
 
-      <Pressable onPress={restartGame} style={styles.restartButton}>
-        <Text style={styles.restartButtonText}>새 퍼즐</Text>
-      </Pressable>
+          <Text style={styles.caption}>{selectedImage.title}</Text>
+        </>
+      ) : (
+        <View style={styles.emptyState}>
+          <Text style={styles.emptyTitle}>이미지를 넣어주세요</Text>
+          <Text style={styles.emptyText}>
+            assets/{puzzleImageDate} 폴더에 jpg, png, webp 이미지를 넣고 npm run
+            prepare-images를 실행하세요.
+          </Text>
+        </View>
+      )}
     </SafeAreaView>
   );
 };
@@ -174,92 +233,91 @@ const styles = StyleSheet.create({
     marginTop: 12,
     textAlign: 'center',
   },
-  statsRow: {
+  toolbar: {
     flexDirection: 'row',
-    marginBottom: 22,
-    marginTop: 30,
+    marginBottom: 18,
+    marginTop: 28,
   },
-  statBox: {
+  button: {
     alignItems: 'center',
-    backgroundColor: '#20352e',
-    borderColor: '#315245',
+    backgroundColor: '#e9f5ee',
     borderRadius: 8,
-    borderWidth: 1,
     marginHorizontal: 6,
-    minWidth: 104,
+    minWidth: 112,
     paddingHorizontal: 18,
     paddingVertical: 12,
   },
-  statLabel: {
-    color: '#a6b8ae',
-    fontSize: 12,
-    fontWeight: '700',
-    letterSpacing: 0,
+  disabledButton: {
+    opacity: 0.45,
   },
-  statValue: {
-    color: '#ffffff',
-    fontSize: 22,
+  buttonText: {
+    color: '#16231f',
+    fontSize: 15,
     fontWeight: '800',
-    marginTop: 4,
   },
   board: {
     backgroundColor: '#0f1715',
     borderColor: '#355948',
     borderRadius: 8,
     borderWidth: 1,
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    padding: 5,
+    overflow: 'hidden',
   },
-  tile: {
-    alignItems: 'center',
-    backgroundColor: '#f2c14e',
-    borderRadius: 8,
-    elevation: 4,
-    justifyContent: 'center',
-    margin: 5,
+  piece: {
+    elevation: 6,
+    position: 'absolute',
     shadowColor: '#000',
-    shadowOffset: {width: 0, height: 4},
-    shadowOpacity: 0.22,
+    shadowOffset: {width: 0, height: 5},
+    shadowOpacity: 0.28,
     shadowRadius: 8,
   },
-  movableTile: {
-    backgroundColor: '#ffd166',
-  },
-  emptyTile: {
-    backgroundColor: '#16231f',
-    borderColor: '#284239',
-    borderStyle: 'dashed',
-    borderWidth: 1,
-    elevation: 0,
-    shadowOpacity: 0,
-  },
-  tileText: {
-    color: '#1d2521',
-    fontSize: 34,
-    fontWeight: '900',
-    letterSpacing: 0,
-  },
-  successText: {
-    color: '#9ae6b4',
-    fontSize: 16,
-    fontWeight: '700',
-    marginTop: 20,
-    minHeight: 24,
-  },
-  restartButton: {
-    alignItems: 'center',
-    backgroundColor: '#e9f5ee',
+  pieceCrop: {
+    backgroundColor: '#20352e',
+    borderColor: '#f8faf7',
     borderRadius: 8,
-    marginTop: 22,
-    minWidth: 148,
-    paddingHorizontal: 22,
-    paddingVertical: 14,
+    borderWidth: 1,
+    overflow: 'hidden',
   },
-  restartButtonText: {
-    color: '#16231f',
-    fontSize: 16,
+  pieceNumber: {
+    backgroundColor: '#16231fcc',
+    borderRadius: 8,
+    color: '#ffffff',
+    fontSize: 11,
     fontWeight: '800',
+    left: 8,
+    minWidth: 22,
+    paddingHorizontal: 5,
+    paddingVertical: 2,
+    position: 'absolute',
+    textAlign: 'center',
+    top: 8,
+  },
+  caption: {
+    color: '#cbd8d1',
+    fontSize: 14,
+    fontWeight: '700',
+    marginTop: 16,
+  },
+  emptyState: {
+    alignItems: 'center',
+    backgroundColor: '#20352e',
+    borderColor: '#315245',
+    borderRadius: 8,
+    borderWidth: 1,
+    marginTop: 34,
+    maxWidth: 420,
+    padding: 20,
+  },
+  emptyTitle: {
+    color: '#ffffff',
+    fontSize: 20,
+    fontWeight: '800',
+    marginBottom: 10,
+  },
+  emptyText: {
+    color: '#cbd8d1',
+    fontSize: 15,
+    lineHeight: 22,
+    textAlign: 'center',
   },
 });
 
